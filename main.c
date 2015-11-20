@@ -2,10 +2,12 @@
  */
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <stdlib.h>
 
 #include "LCD4.h"
 #include "keypad.h"
+
+#include <util/delay.h>
+#include <stdlib.h>
 
 #define ALERT_ON    1
 #define ALERT_OFF   0
@@ -34,7 +36,7 @@
 #define GUI_MENU            3
 #define GUI_MODE_SELECTED   4
 #define GUI_CODE            "1111"
-#define GUI_HIDDEN          '*'
+#define GUI_HIDDEN          'X'
 
 struct GUI
 {
@@ -228,45 +230,72 @@ unsigned int sensor_read(struct Sensor sensor)
 
 void process_input()
 {
-    short i;
-
-        switch(state.gui)
+    switch(state.gui)
+    {
+    case GUI_LOGIN:
+        if(gui.code_input_count >= 4)
         {
-        case GUI_LOGIN:
-            if(gui.code_input_count>=4){
-                gui.code_input_count=0;
-                if(gui.code[0] == GUI_CODE[0] &&
-                   gui.code[1] == GUI_CODE[1] &&
-                   gui.code[2] == GUI_CODE[2] &&
-                gui.code[3] == GUI_CODE[3]){
-                        //check for correct code, could you strcmp, but this is one less libary to include
-                    state.gui = GUI_MENU;
-                    clearLCD();
-                }
-                else{
-                    state.gui = GUI_INCORRECT;
-                    clearLCD();
-                }
-                //reset code and count
-            } else{
-                if(gui.last != 0){
-                    gui.code[gui.code_input_count] = gui.last;
-                    gui.last = 0;
-                    gui.code_input_count++;
-                }
+            //reset code and count
+            gui.code_input_count = 0;
+            if(gui.code[0] == GUI_CODE[0] &&
+                    gui.code[1] == GUI_CODE[1] &&
+                    gui.code[2] == GUI_CODE[2] &&
+                    gui.code[3] == GUI_CODE[3])
+            {
+                //check for correct code, could you strcmp, but this is one less libary to include
+                state.gui = GUI_MENU;
+                clearLCD();
             }
+            else
+            {
+                state.gui = GUI_INCORRECT;
+                clearLCD();
+            }
+        }
+        else
+        {
+            if(gui.last != 0)
+            {
+                gui.code[gui.code_input_count] = gui.last;
+                gui.last = 0;
+                gui.code_input_count++;
+            }
+        }
+        break;
+    case GUI_MENU:
+        switch(gui.last)
+        {
+        case 'A':
+            state.arm = ARM_DISARM;
+            state.gui = GUI_MODE_SELECTED;
             break;
-        case GUI_MENU:
-            goto4LCD(0,0);
-            send4String("Menu Options");
+        case 'B':
+            state.arm = ARM_STAY;
+            state.gui = GUI_MODE_SELECTED;
             break;
-        case GUI_MODE_SELECTED:
+        case 'C':
+            state.arm = ARM_AWAY;
+            state.gui = GUI_MODE_SELECTED;
             break;
-        case GUI_INCORRECT:
-            goto4LCD(0,0);
-            send4String("Incorrect Code\nTry Again");
+        case 'D':
+            state.arm = ARM_INSTANT;
+            state.gui = GUI_MODE_SELECTED;
             break;
         }
+        gui.last=0;
+        break;
+
+    case GUI_MODE_SELECTED:
+        //break; fall through
+    case GUI_INCORRECT:
+        if(gui.last != 0)
+        {
+            gui.last = 0;
+            state.gui = GUI_LOGIN;
+            clearLCD();
+        }
+        break;
+    }
 
 }
 
@@ -289,10 +318,36 @@ void update_display()
         }
         break;
     case GUI_MENU:
+        goto4LCD(0, 0);
+        send4String("A: Disa  B: Stay\n"
+                    "C: Away  D: Inst");
         break;
     case GUI_MODE_SELECTED:
+        goto4LCD(0, 0);
+        switch(state.arm)
+        {
+        case ARM_AWAY:
+            send4String("  System Armed  \n"
+                        "   AWAY MODE    ");
+            break;
+        case ARM_DISARM:
+            send4String("System Disarmed \n"
+                        "                ");
+            break;
+        case ARM_STAY:
+            send4String("  System Armed  \n"
+                        "   STAY MODE    ");
+            break;
+        case ARM_INSTANT:
+            send4String("  System Armed  \n"
+                        "  INSTANT MODE  ");
+            break;
+        }
         break;
     case GUI_INCORRECT:
+        goto4LCD(0, 0);
+        send4String(" Incorrect Code \n"
+                    "   Try Again    ");
         break;
     }
 
@@ -301,12 +356,6 @@ void update_display()
     send4String(buffer);
 }
 
-//Interupts
-ISR(TIMER0_OVF_vect)
-{
-    //TODO
-    //Timer/Counter0 Overflow
-}
 ISR(TIMER0_COMP_vect)
 {
     short i;
@@ -335,8 +384,6 @@ ISR(TIMER0_COMP_vect)
 }
 ISR(INT1_vect)
 {
-    //TODO recode to make it useful for the alarm program
-
     //static keyword: keep scoped to the function, but not re-allocated every call
     static unsigned char keymap[] = {'A', '3', '2', '1', 'B', '6', '5', '4', 'C', '9', '8', '7', 'D', '#', '0', '*'};
 
