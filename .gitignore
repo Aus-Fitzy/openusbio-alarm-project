@@ -37,3 +37,4 @@ bin/*
 #codeBlocks
 *.cbp
 *.depend
+*.layout
