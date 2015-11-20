@@ -28,10 +28,26 @@
 
 #define TIMER_1MS_COUNT  188//12000000 / (64 * 1000)
 
+
+#define GUI_LOGIN           1
+#define GUI_INCORRECT       2
+#define GUI_MENU            3
+#define GUI_MODE_SELECTED   4
+#define GUI_CODE            "1111"
+#define GUI_HIDDEN          '*'
+
+struct GUI
+{
+    char code[4];
+    char code_input_count;
+    volatile char last;
+};
+
 struct SystemState
 {
-    char alert;
-    char arm;
+    volatile char alert;
+    volatile char arm;
+    volatile char gui;
 };
 
 struct Sensor
@@ -45,11 +61,13 @@ struct Sensor
 
 struct SystemState state;
 struct Sensor sensors[SENSOR_COUNT];
+struct GUI gui;
 
 void init();
 void init_timer();
 void configure_state();
 void poll_sensors();
+void process_input();
 void update_display();
 
 void init_sensors();
@@ -64,6 +82,7 @@ int main(void)
     {
         configure_state();
         poll_sensors();
+        process_input();
         update_display();
     }
 
@@ -76,11 +95,11 @@ void init()
     sei();
 
     init4LCD();
+    initKeypad();
     init_timer();
     init_sensors();
 
-    //Alarm
-    DDRB |= (1 << PB0);
+    state.gui = GUI_LOGIN;
 }
 
 void init_timer()
@@ -123,10 +142,10 @@ void init_sensors()
     sensors[2].time_on = 0;
 
     //setup the ADC
-    ADMUX   |=  (1<<REFS0);     //AVCC with external cap
+    ADMUX   |=  (1 << REFS0);   //AVCC with external cap
 
-    ADCSRA  |=  (1<<ADEN)  |     //ADC Enable
-                (1<<ADPS2) | (1<<ADPS1);     //64x prescaler
+    ADCSRA  |=  (1 << ADEN)  |   //ADC Enable
+                (1 << ADPS2) | (1 << ADPS1); //64x prescaler
 
 }
 
@@ -135,13 +154,13 @@ void configure_state()
     if(state.alert == ALERT_ON)
     {
         //TODO activate siren
-        goto4LCD(1,0);
+        goto4LCD(1, 0);
         send4Char('A');
     }
     else
     {
         //TODO disactivate siren
-        goto4LCD(1,0);
+        goto4LCD(1, 0);
         send4Char('D');
     }
 
@@ -190,26 +209,95 @@ unsigned int sensor_read(struct Sensor sensor)
     //TODO ADC from sensor pin to level;
 
     //select the channel based on the sensor setup
-    ADMUX |= (sensor.mux[2]<<MUX2 |
-              sensor.mux[1]<<MUX1 |
-              sensor.mux[0]<<MUX0);
+    ADMUX |= (sensor.mux[2] << MUX2 |
+              sensor.mux[1] << MUX1 |
+              sensor.mux[0] << MUX0);
     //start the conversion
-    ADCSRA |= (1<<ADSC);
-    while((ADCSRA & (1<<ADIF)) == 0)
-            ;   //wait for conversion to be done
-                //12Mhz / 64 prescale / 25 clock for conversion = 7.5Khz sample rate
-                // or 133us per sample
+    ADCSRA |= (1 << ADSC);
+    while((ADCSRA & (1 << ADIF)) == 0)
+        ;
+    // wait for conversion to be done
+    // 12Mhz / 64 prescale / 25 clock for conversion = 7.5Khz sample rate
+    // or 133us per sample
 
     level  = ADCL; //read ADCL first
-    level |= ADCH <<8;
+    level |= ADCH << 8;
 
     return level;
 }
 
-void update_display(){
+void process_input()
+{
+    short i;
+
+        switch(state.gui)
+        {
+        case GUI_LOGIN:
+            if(gui.code_input_count>=4){
+                gui.code_input_count=0;
+                if(gui.code[0] == GUI_CODE[0] &&
+                   gui.code[1] == GUI_CODE[1] &&
+                   gui.code[2] == GUI_CODE[2] &&
+                gui.code[3] == GUI_CODE[3]){
+                        //check for correct code, could you strcmp, but this is one less libary to include
+                    state.gui = GUI_MENU;
+                    clearLCD();
+                }
+                else{
+                    state.gui = GUI_INCORRECT;
+                    clearLCD();
+                }
+                //reset code and count
+            } else{
+                if(gui.last != 0){
+                    gui.code[gui.code_input_count] = gui.last;
+                    gui.last = 0;
+                    gui.code_input_count++;
+                }
+            }
+            break;
+        case GUI_MENU:
+            goto4LCD(0,0);
+            send4String("Menu Options");
+            break;
+        case GUI_MODE_SELECTED:
+            break;
+        case GUI_INCORRECT:
+            goto4LCD(0,0);
+            send4String("Incorrect Code\nTry Again");
+            break;
+        }
+
+}
+
+void update_display()
+{
     char buffer[8];
-    itoa(sensors[0].level,buffer,10);
-    goto4LCD(0,0);
+    short i = 0;
+
+    //Over wrighting is better then clearing and then writing
+    //printf is too slow to use
+    switch(state.gui)
+    {
+    case GUI_LOGIN:
+
+        goto4LCD(0, 0);
+        send4String("Code: ");
+        for(i = 0; i < gui.code_input_count; i++)
+        {
+            send4Char(GUI_HIDDEN);
+        }
+        break;
+    case GUI_MENU:
+        break;
+    case GUI_MODE_SELECTED:
+        break;
+    case GUI_INCORRECT:
+        break;
+    }
+
+    itoa(sensors[0].level, buffer, 10);
+    goto4LCD(1, 10);
     send4String(buffer);
 }
 
@@ -250,22 +338,10 @@ ISR(INT1_vect)
     //TODO recode to make it useful for the alarm program
 
     //static keyword: keep scoped to the function, but not re-allocated every call
-    static unsigned char counter = 0;
     static unsigned char keymap[] = {'A', '3', '2', '1', 'B', '6', '5', '4', 'C', '9', '8', '7', 'D', '#', '0', '*'};
 
     unsigned char keypad;
 
-    if(counter == 16)
-    {
-        goto4LCD(1, 0);
-    }
-    else if(counter == 32)
-    {
-        clearLCD();
-        counter = 0;
-    }
-
     keypad = PINB & KEYPAD_DATA; //lower nibble
-    send4Char(keymap[keypad]);
-    counter++;
+    gui.last = keymap[keypad];
 }
