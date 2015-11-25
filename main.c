@@ -24,9 +24,9 @@
 
 #define SENSOR_COUNT 3
 
-//TODO calcualte threasholds for voltages
-#define SENSOR_LOW  300
-#define SENSOR_HIGH 700
+
+#define SENSOR_LOW  350 //3.25V to 5V
+#define SENSOR_HIGH 607 // 0V to 2V
 
 #define TIMER_1MS_COUNT  188//12000000 / (64 * 1000)
 
@@ -50,6 +50,7 @@ struct SystemState
     volatile char alert;
     volatile char arm;
     volatile char gui;
+	volatile unsigned int delay;
 };
 
 struct Sensor
@@ -119,29 +120,31 @@ void init_sensors()
 {
     //TODO adjust pins
 
-    //Sensor 0
+    //Sensor 0  safe
     sensors[0].active = SENSOR_DISACTIVATED;
     sensors[0].armed = SENSOR_ARMED;
-    sensors[0].mux[0] = 0;//PA6
-    sensors[0].mux[1] = 1;
-    sensors[0].mux[2] = 1;
+    sensors[0].mux[0] = 0;//PA0
+    sensors[0].mux[1] = 0;
+    sensors[0].mux[2] = 0;
     sensors[0].time_on = 0;
 
-    //Sensor 1
+    //Sensor 1  door
     sensors[1].active = SENSOR_DISACTIVATED;
     sensors[1].armed = SENSOR_DISARMED;
-    sensors[0].mux[0] = 0;//PA6
-    sensors[0].mux[1] = 1;
-    sensors[0].mux[2] = 1;
+    sensors[1].mux[0] = 0;//PA2
+    sensors[1].mux[1] = 1;
+    sensors[1].mux[2] = 0;
     sensors[1].time_on = 0;
 
-    //Sensor 2
+    //Sensor 2 smoke alarm
     sensors[2].active = SENSOR_DISACTIVATED;
-    sensors[2].armed = SENSOR_DISARMED;
-    sensors[0].mux[0] = 0;//PA6
-    sensors[0].mux[1] = 1;
-    sensors[0].mux[2] = 1;
+    sensors[2].armed = SENSOR_ARMED;
+    sensors[2].mux[0] = 0;//PA4
+    sensors[2].mux[1] = 0;
+    sensors[2].mux[2] = 1;
     sensors[2].time_on = 0;
+
+	DDRA = 0x00;
 
     //setup the ADC
     ADMUX   |=  (1 << REFS0);   //AVCC with external cap
@@ -149,39 +152,55 @@ void init_sensors()
     ADCSRA  |=  (1 << ADEN)  |   //ADC Enable
                 (1 << ADPS2) | (1 << ADPS1); //64x prescaler
 
+	state.delay = 1000;
 }
 
 void configure_state()
 {
+    DDRB|=(1<<PB4);
+
     if(state.alert == ALERT_ON)
     {
-        //TODO activate siren
-        goto4LCD(1, 0);
-        send4Char('A');
+        PORTB|=(1<<PB4);  //turn on LED pin pin 29 J5
+        //goto4LCD(1, 0);
+        //send4Char('A');
     }
     else
     {
-        //TODO disactivate siren
-        goto4LCD(1, 0);
-        send4Char('D');
+       
+		PORTB &=(0<<PB4);
+        //goto4LCD(1, 0);
+        //send4Char('D');
     }
 
     switch(state.arm)
     {
     case ARM_AWAY:
-        //TODO
+	    sensors[0].armed = SENSOR_ARMED;  //turn off safe sensor
+		sensors[1].armed = SENSOR_ARMED;  //turn off door sensor
+		state.delay = 1000;
+
+
         break;
 
     case ARM_STAY:
-        //TODO
+        sensors[0].armed = SENSOR_DISARMED;  //turn off safe sensor
+		sensors[1].armed = SENSOR_ARMED;  //turn off door sensor
+		state.delay = 1000;
         break;
 
     case ARM_INSTANT:
-        //TODO
+        sensors[0].armed = SENSOR_DISARMED;  //turn off safe sensor
+		sensors[1].armed = SENSOR_ARMED;  //turn off door sensor
+		state.delay = 0;
         break;
 
     case ARM_DISARM:
-        //TODO
+        sensors[0].armed = SENSOR_DISARMED;  //turn off safe sensor
+		sensors[1].armed = SENSOR_DISARMED;  //turn off door sensor
+		state.delay = 1000;
+
+		//TODO
         break;
 
     }
@@ -211,6 +230,8 @@ unsigned int sensor_read(struct Sensor sensor)
     //TODO ADC from sensor pin to level;
 
     //select the channel based on the sensor setup
+	ADMUX &= 0b11100000;
+
     ADMUX |= (sensor.mux[2] << MUX2 |
               sensor.mux[1] << MUX1 |
               sensor.mux[0] << MUX0);
@@ -244,6 +265,7 @@ void process_input()
             {
                 //check for correct code, could you strcmp, but this is one less libary to include
                 state.gui = GUI_MENU;
+				state.alert = ALERT_OFF;
                 clearLCD();
             }
             else
@@ -316,6 +338,21 @@ void update_display()
         {
             send4Char(GUI_HIDDEN);
         }
+		itoa(sensors[0].level, buffer, 10);
+    	goto4LCD(1, 2);
+    	send4String(buffer);
+		send4String("  ");
+
+		itoa(sensors[1].level, buffer, 10);
+    	goto4LCD(1, 8);
+    	send4String(buffer);
+		send4String("  ");
+
+		itoa(sensors[2].level, buffer, 10);
+    	goto4LCD(1, 12);
+    	send4String(buffer);
+		send4String("  ");
+
         break;
     case GUI_MENU:
         goto4LCD(0, 0);
@@ -351,9 +388,6 @@ void update_display()
         break;
     }
 
-    itoa(sensors[0].level, buffer, 10);
-    goto4LCD(1, 10);
-    send4String(buffer);
 }
 
 ISR(TIMER0_COMP_vect)
@@ -366,7 +400,7 @@ ISR(TIMER0_COMP_vect)
         if(sensors[i].armed == SENSOR_ARMED &&
                 sensors[i].active == SENSOR_ACTIVATED)
         {
-            if(sensors[i].time_on > 1000)
+            if(sensors[i].time_on > state.delay)
             {
                 state.alert = ALERT_ON;
             }
