@@ -9,7 +9,7 @@ void send4String(char * str)
     unsigned char i;
     unsigned char length = strlen(str);
 
-    for(i=0; i< length && i< 256; i++ ) //max of 256 chars
+    for(i=0; i< length; i++ ) //max of 256 chars
     {
         if(str[i] == '\n')
             goto4LCD(1,0);
